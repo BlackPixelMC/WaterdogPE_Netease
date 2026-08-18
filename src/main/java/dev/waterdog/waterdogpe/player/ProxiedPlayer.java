@@ -1155,6 +1155,16 @@ public class ProxiedPlayer implements CommandSender {
         return this.loginData.getNetEaseData();
     }
 
+    /**
+     * 返回网易平台用户 UID；非网易登录或 UID 不可用时返回 -1。
+     *
+     * @return 网易 UID，或 -1
+     */
+    public long getNetEaseUid() {
+        LoginData.NetEaseData data = this.loginData.getNetEaseData();
+        return data == null ? -1L : data.uid();
+    }
+
     public boolean canRewrite() {
         return this.canRewrite;
     }
