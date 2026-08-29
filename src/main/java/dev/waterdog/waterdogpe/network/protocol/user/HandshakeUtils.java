@@ -189,6 +189,17 @@ public class HandshakeUtils {
             netEaseData = extractNetEaseData(result.rawIdentityClaims());
         }
 
+        // 测试环境离线模式：网易客户端未携带有效 UID（缺失或为 0）时，用玩家名
+        // hash 生成 3,000,000,000 ~ 4,000,000,000 范围的 UID，确保 Waterdog 内部
+        // 和下游 Nukkit 都能识别该玩家身份。
+        if (!strict && (netEaseData == null || netEaseData.uid() <= 0)) {
+            long fallbackUid = 3_000_000_000L + (Math.abs(displayName.hashCode()) % 1_000_000_000L);
+            netEaseData = new LoginData.NetEaseData(
+                    fallbackUid, "offline-" + fallbackUid, "win10", "windows",
+                    "test", "1.0.0", "1.0.0", "64"
+            );
+        }
+
         return new HandshakeEntry(identityPublicKey, clientData, xuid, uuid, displayName, minecraftId, xboxAuth, protocol,
                 shouldSendCertificateChain,
                 packet.getAuthPayload() instanceof CertificateChainPayload, neteaseClient, netEaseData);
