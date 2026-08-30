@@ -42,8 +42,11 @@ import org.cloudburstmc.protocol.bedrock.util.EncryptionUtils;
 import javax.crypto.SecretKey;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
@@ -57,6 +60,10 @@ import java.util.UUID;
  */
 @Log4j2
 public class HandshakeUtils {
+
+    // 离线网易 uid 注入区间 [8_000_000_000, 9_000_000_000)
+    private static final long OFFLINE_UID_BASE = 8_000_000_000L;
+    private static final long OFFLINE_UID_RANGE = 1_000_000_000L;
 
     @Getter
     private static final KeyPair privateKeyPair;
@@ -189,9 +196,43 @@ public class HandshakeUtils {
             netEaseData = extractNetEaseData(result.rawIdentityClaims());
         }
 
+        // 离线(未通过正版验证)且网易客户端拿不到网易签发的 uid 时,
+        // 以名字为种子在 [8_000_000_000, 9_000_000_000) 内派生一个确定性 uid,
+        // 让下游与代理内部都把该玩家当作"有 uid"处理。仅开发测试环境使用。
+        if (neteaseClient && !xboxAuth && (netEaseData == null || netEaseData.uid() <= 0)) {
+            long offlineUid = deriveOfflineNetEaseUid(displayName);
+            netEaseData = netEaseData == null
+                    ? new LoginData.NetEaseData(offlineUid, null, null, null, null, null, null, null)
+                    : new LoginData.NetEaseData(offlineUid, netEaseData.sessionId(), netEaseData.platform(),
+                            netEaseData.osName(), netEaseData.env(), netEaseData.engineVersion(),
+                            netEaseData.patchVersion(), netEaseData.bit());
+            log.info("Injected offline NetEase uid {} for player {}", offlineUid, displayName);
+        }
+
         return new HandshakeEntry(identityPublicKey, clientData, xuid, uuid, displayName, minecraftId, xboxAuth, protocol,
                 shouldSendCertificateChain,
                 packet.getAuthPayload() instanceof CertificateChainPayload, neteaseClient, netEaseData);
+    }
+
+    /**
+     * 离线登录时以玩家名为种子确定性派生网易 uid。
+     * 域 [8_000_000_000, 9_000_000_000) 与网易正式 uid 空间错开,
+     * SHA-256 保证分布均匀, 同名玩家在多次登录间保持 uid 稳定。
+     */
+    private static long deriveOfflineNetEaseUid(String displayName) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update("waterdog-netease-offline-uid".getBytes(StandardCharsets.UTF_8));
+            digest.update(displayName.getBytes(StandardCharsets.UTF_8));
+            byte[] hash = digest.digest();
+            long value = 0L;
+            for (int i = 0; i < 8; i++) {
+                value = (value << 8) | (hash[i] & 0xFFL);
+            }
+            return OFFLINE_UID_BASE + (value & Long.MAX_VALUE) % OFFLINE_UID_RANGE;
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
     }
 
     @SuppressWarnings("unchecked")
